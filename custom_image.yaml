@@ -1,0 +1,68 @@
+---
+- name: Automate RHEL Image Creation
+  hosts: localhost
+  become: yes
+  tasks:
+
+    - name: Create blueprint file
+      copy:
+        dest: "/tmp/custom-blueprint.toml"
+        content: |
+          name = "custom-rhel-image"
+          description = "A custom RHEL image created using Image Builder"
+          version = "0.1.0"
+          [[packages]]
+          name = "httpd"
+          version = "*"
+          [[packages]]
+          name = "vim"
+          version = "*"
+
+    - name: Push the blueprint
+      command: >
+        composer-cli blueprints push /tmp/custom-blueprint.toml
+
+    - name: Verify the blueprint
+      command: >
+        composer-cli blueprints list
+      register: blueprint_list
+      changed_when: false
+
+    - name: Start image build
+      command: >
+        composer-cli compose start custom-rhel-image qcow2
+      register: build_status
+      changed_when: false
+
+    - name: Wait for image build completion
+      shell: |
+        while composer-cli compose status | grep -E "(RUNNING|WAITING)"; do
+          sleep 10
+        done
+      async: 0
+      poll: 0
+      retries: 30
+      delay: 20
+
+    - name: Get the build UUID
+      shell: |
+        composer-cli compose status | grep FINISHED | awk '{print $1}'
+      register: build_uuid
+      changed_when: false
+
+    - name: Download the image
+      command: >
+        composer-cli compose image {{ build_uuid.stdout }}
+      args:
+        chdir: /tmp
+
+    - name: Verify image creation
+      stat:
+        path: "/tmp/{{ build_uuid.stdout }}-disk.qcow2"
+      register: image_status
+
+    - name: Show image creation result
+      debug:
+        msg: "Custom image created: /tmp/{{ build_uuid.stdout }}-disk.qcow2"
+      when: image_status.stat.exists
+
